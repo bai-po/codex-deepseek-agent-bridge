@@ -42,8 +42,9 @@ export function createLifecycle({file,deliver,lookupLegacy,readReceipt,validateA
       if(action==='get')return publicAgent(agent(args.agentId));
       if(action!=='register')fail('request/invalid','未知agent action');
       if(!['codex','deepseek'].includes(args.side))fail('request/invalid','side必须为codex或deepseek');
-      const sid=text(args.sessionId,'sessionId');if(validateAgent)await validateAgent({...args,sessionId:sid});const found=Object.values(data.agents).find(a=>a.side===args.side&&a.sessionId===sid);
+      const sid=text(args.sessionId,'sessionId');const found=Object.values(data.agents).find(a=>a.side===args.side&&a.sessionId===sid);
       if(found){if(args.agentId&&args.agentId!==found.id)fail('agent/conflict','真实会话已绑定编号');if(args.alias){authenticate(found,args.agentKey);found.alias=text(args.alias,'alias');await save();}return publicAgent(found);}
+      if(validateAgent)await validateAgent({...args,sessionId:sid});
       const prefix=args.side==='codex'?'CX-':'DS-';const id=args.agentId?text(args.agentId,'agentId'):prefix+randomBytes(5).toString('hex').toUpperCase();
       if(!id.startsWith(prefix)||!/^([A-Z]{2})-[A-Za-z0-9_-]{3,40}$/.test(id))fail('agent/conflict','编号前缀或格式无效');if(data.agents[id])fail('agent/conflict','编号已占用');
       const agentKey=randomBytes(32).toString('hex');const a={id,keyHash:keyHash(agentKey),side:args.side,sessionId:sid,alias:text(args.alias,'alias',true)||id,createdAt:now()};data.agents[id]=a;await save();return {...publicAgent(a),agentKey};

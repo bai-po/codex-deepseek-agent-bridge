@@ -45,3 +45,5 @@ complete 必须提供实际 evidence，只是提交本修订完成报告，不�
 
 身份发现边界：bridge_agent list/get 是回环 token 保护下的公开只读名录，不要求 agentKey，仅返回编号、side、sessionId、alias 等路由信息，绝不返回密钥或哈希。所有 bridge_task 操作（包括任务 list/get）及修改身份别名均要求自己的 agentKey；名录可见不表示可冒充该编号。
 更正重试：correct 必须提供 reason、requestId 和首次操作时的 expectedRevision。一次更正意图始终沿用同一 requestId；重复调用返回当前条目，不重复投递；同一 ID 对应不同正文会冲突。结果不确定先查事件，不能换 ID 盲重发。
+
+更正投递的确定失败（definitive，明确未发送）会向调用方抛错；可用同一requestId安全重试，不会建立新修订事件。不确定结果（uncertain）禁止盲重发，应先核对任务事件与对方记录。

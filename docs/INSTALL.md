@@ -18,7 +18,7 @@ pwsh -NoProfile -File ./scripts/install.ps1 -Target Both -DryRun
 pwsh -NoProfile -File ./scripts/install.ps1 -Target Both -HostStopped
 ```
 
-若标签未发布，固定发布页给出的完整提交 SHA，不把未验证 main 当作验收版本。可以使用 `-Target Codex` 或 `DeepSeek` 单端安装。`-InstallRoot` 指定持久版本目录，默认从平台 LocalApplicationData 发现。DeepSeek 默认从 UserProfile 下 `.dsh/profiles/desktop` 发现 profile；非默认 profile 显式传 `-DeepSeekProfile <目录>`。`-CodexCommand <CLI路径>` 可选择 CLI。
+若标签未发布，固定发布页给出的完整提交 SHA，不把未验证 main 当作验收版本。可以使用 `-Target Codex` 或 `DeepSeek` 单端安装。`-InstallRoot` 指定持久版本目录，默认从平台 Documents（MyDocuments）发现。DeepSeek 默认从 UserProfile 下 `.dsh/profiles/desktop` 发现 profile；非默认 profile 显式传 `-DeepSeekProfile <目录>`。`-CodexCommand <CLI路径>` 可选择 CLI。
 
 Codex 安装使用版本副本的 `.agents/plugins/marketplace.json`，执行公开 `codex plugin marketplace add <副本目录>`、`codex plugin add <插件名>@<marketplace名>`。脚本先探测 CLI help，不手工修改 Codex 配置。重复注册以本机 CLI 实际结果为准，错误不得称安装完成。
 

@@ -10,7 +10,7 @@
 #   stateDir       durable state: token, endpoint.json, tasks.json, audit.jsonl
 #   workspaceRoot  workspace used to pick a default DSH session / default Codex thread
 #   codexBin       explicit path to codex.exe (default: probe PATH and known installs)
-#   autoNotify     accept POST /events from the Codex Stop hook (default true)
+#   autoNotify     legacy automatic notifications are disabled
 #   maxWaitMs      longest long-poll for POST /tasks/{id}/wait (default 30000)
 - insert:
     - id: agent-bridge

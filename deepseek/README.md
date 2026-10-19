@@ -1,55 +1,16 @@
-# dsh-agent-bridge（DSH 端插件）
+# Agent Bridge — DeepSeek版
 
-DSH 侧的一半：把 Codex 的短任务消息接进 DSH 会话，并让 DSH agent 反过来把任务发给既有 Codex 会话。
+此目录是独立双端仓库的 DeepSeek Harness 插件，版本 1.0.3-local.2。
 
-- 协议：`../docs/protocol.md`
-- Codex 侧另一半：`../codex-plugin/`
+- [安装、升级、卸载与回滚](../docs/INSTALL.md)
+- [本端 agent 使用手册](MANUAL.md)
+- [任务协议与示例](../docs/USAGE.md)
+- [Codex版](../codex/)
 
-## 它做什么
+在真实桌面宿主内挂认证回环 HTTP 服务，注册 bridge_agent、bridge_task、bridge_manual，以及兼容工具 codex_task、codex_result、codex_threads、bridge_status。使用工具前先读手册，准确登记当前会话并保管一次性能力密钥。
 
-1. 在 DSH 内置回环 web server 上挂 `/agent-bridge`：
-   - `GET /ping`、`GET /health`、`GET /sessions`
-   - `POST /tasks/send`（Codex → DSH，注入一条普通 user 消息）
-   - `GET /tasks/{id}`、`POST /tasks/{id}/wait`、`GET /tasks`
-   - `POST /events`（Codex Stop hook 自动上报）
-2. 激活时写发现文件 `~/.dsh/agent-bridge/endpoint.json` 与 token `~/.dsh/agent-bridge/token`。
-3. 注册 DSH 工具：`codex_task`、`codex_result`、`codex_threads`、`bridge_status`（DSH → Codex，走本机 `codex` CLI）。
-4. 审计：`~/.dsh/agent-bridge/audit.jsonl`（只有任务 ID、方向、长度、状态，不含正文）。
+任务支持列表、编辑、可恢复删除、直接发送、更正与双方确认闭环。删除桥接条目不会撤回宿主消息。队列接受不证明聊天已消费。闭环通知只发一次并明确不要求回信，不使用 Stop hook 或自动 turn-end 通知。
 
-## 配置（cordis.patch.yml 的 config）
+状态默认保存在当前用户 .dsh/agent-bridge；卸载保留状态以便恢复编号和历史，不要删除整个状态目录。通过配置 stateDir 可更改位置。其他配置包括 prefix、workspaceRoot、codexBin、maxWaitMs、taskTimeoutMs；autoNotify 强制禁用。
 
-| 键 | 默认 | 说明 |
-|---|---|---|
-| `prefix` | `/agent-bridge` | 路由前缀 |
-| `stateDir` | `~/.dsh/agent-bridge` | token / endpoint / tasks / audit 的目录 |
-| `workspaceRoot` | `process.cwd()` | 默认 DSH 会话与默认 Codex 线程的筛选工作区 |
-| `codexBin` | 自动探测 | `codex.exe` 路径 |
-| `autoNotify` | `true` | 是否接受 Codex Stop hook 的 `POST /events` |
-| `maxWaitMs` | `30000` | 长轮询上限 |
-| `taskTimeoutMs` | `600000` | 单任务等待 DSH turn 结束的上限 |
-
-## 安装 / 卸载
-
-```powershell
-# 安装（DSH 已登录桌面端时）
-# 通过 DSH 的插件管理：plugin_manager install_bundle <本目录绝对路径>
-# 或：DSH 设置 → 插件 → 添加插件 → 本地目录
-
-# 卸载
-# plugin_manager remove_bundle dsh-agent-bridge
-# 删除 ~/.dsh/agent-bridge/ 即无残留（会话中的历史消息不受影响）
-```
-
-## 边界
-
-- 只监听 DSH 自己的回环地址；不新开端口、不监听 `0.0.0.0`。
-- 不读写 DSH / Codex 的会话存储文件；只通过 `sessionController` 和 `codex` CLI 的公开接口工作。
-- 注入消息是普通 user 消息，DSH agent 自己决定是否处理，不会自动开始审查或改代码。
-- 每个有任务的会话只保留一条 live tail；任务结束后 5 分钟无活动即断开。
-
-## 1.0.2-local.1 消息投递
-
-codex_task 必须提供接收方准确的 thread UUID；不再按最新聊天猜测。默认 delivery=queue，通过公开 codex queue 排入该聊天，避免与桌面端活动writer竞争。正在进行的轮次结束后才可处理排队消息；排队接受不代表已读或已回复。delivery=resume 只适合明确未被桌面或其他客户端占用的聊天。
-
-队列命令的即时失败直接返回工具错误。codex_result用于查看命令接受或错误；队列投递不跟踪接收聊天的后续模型回复。
-
+插件图标使用用户确认形象的透明 PNG 导出版。宿主支持 PNG，导出文件需不超过 256 KiB；源码附静态检查。安装和验收范围以仓库文档与实际日志为准。

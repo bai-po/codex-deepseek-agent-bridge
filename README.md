@@ -1,6 +1,6 @@
 # Codex ⇄ DeepSeek Agent Bridge
 
-本地双向 agent 任务桥，版本 **1.0.3-local.2**，MIT。独立仓库：[bai-po/codex-deepseek-agent-bridge](https://github.com/bai-po/codex-deepseek-agent-bridge)。
+本地双向 agent 任务桥，版本 **1.0.3-local.3**，MIT。独立仓库：[bai-po/codex-deepseek-agent-bridge](https://github.com/bai-po/codex-deepseek-agent-bridge)。
 
 Codex 端是 MCP 插件；DeepSeek Harness 端提供回环 HTTP 服务、身份映射和持久任务状态。两端均支持真实会话登记、任务列表、草稿、编辑、软删除/恢复、直接发送、更正修订与验收闭环。
 

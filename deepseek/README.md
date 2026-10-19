@@ -1,6 +1,6 @@
 # Agent Bridge — DeepSeek版
 
-此目录是独立双端仓库的 DeepSeek Harness 插件，版本 1.0.3-local.2。
+此目录是独立双端仓库的 DeepSeek Harness 插件，版本 1.0.3-local.3。
 
 - [安装、升级、卸载与回滚](../docs/INSTALL.md)
 - [本端 agent 使用手册](MANUAL.md)

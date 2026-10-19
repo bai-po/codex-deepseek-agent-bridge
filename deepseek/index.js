@@ -26,7 +26,7 @@ import { isoNow, normalizePrefix } from './lib/util.mjs'
 export const name = 'agent-bridge'
 export const inject = ['webServer', 'sessionController', 'tools']
 
-const VERSION = '1.0.3-local.1'
+const VERSION = JSON.parse(await readFile(new URL('./package.json', import.meta.url), 'utf8')).version
 
 function resolveOrigin(ctx) {
   try {

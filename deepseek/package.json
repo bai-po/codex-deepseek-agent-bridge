@@ -1,6 +1,6 @@
 {
   "name": "dsh-agent-bridge",
-  "version": "1.0.3-local.2",
+  "version": "1.0.3-local.3",
   "displayName": "Agent Bridge — DeepSeek版",
   "description": "Bidirectional task bridge between DeepSeek Harness and Codex: loopback HTTP endpoints for Codex-side MCP tools, and codex_task/codex_result tools for DSH agents.",
   "type": "module",

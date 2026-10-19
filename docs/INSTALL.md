@@ -5,7 +5,7 @@
 ```powershell
 git clone https://github.com/bai-po/codex-deepseek-agent-bridge.git
 Set-Location codex-deepseek-agent-bridge
-git checkout v1.0.3-local.2
+git checkout v1.0.3-local.3
 node --version
 pwsh --version
 codex plugin --help

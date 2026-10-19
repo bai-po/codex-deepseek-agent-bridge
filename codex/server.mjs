@@ -25,7 +25,7 @@ import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
 
 const SERVER_NAME = "deepseek-bridge";
-const SERVER_VERSION = "1.0.3-local.2";
+const SERVER_VERSION = JSON.parse(await readFile(new URL("./plugin.json", import.meta.url), "utf8")).version;
 const SUPPORTED_PROTOCOL_VERSIONS = ["2025-06-18", "2025-03-26", "2024-11-05"];
 const DEFAULT_PROTOCOL_VERSION = "2025-06-18";
 

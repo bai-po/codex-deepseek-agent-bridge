@@ -1,6 +1,6 @@
 # DeepSeek agent 手册
 
-版本 1.0.3-local.2。提供回环 HTTP 服务和桥工具；sessionId 是当前真实 Harness 会话 ID，不可填 Codex thread ID。接收方 Codex 必须登记，默认 queue 投递。
+版本 1.0.3-local.3。提供回环 HTTP 服务和桥工具；sessionId 是当前真实 Harness 会话 ID，不可填 Codex thread ID。接收方 Codex 必须登记，默认 queue 投递。
 
 # 工具操作
 

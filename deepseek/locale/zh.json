@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Agent 桥",
+    "description": "DeepSeek Harness 与 Codex 双向任务桥：Codex 的 agent 可以把任务发进当前 DSH 会话，DSH 的 agent 也能把任务发给既有的 Codex 会话并取回结果。"
+  }
+}

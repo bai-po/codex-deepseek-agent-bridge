@@ -1,0 +1,29 @@
+{
+  "mcpServers": {
+    "deepseek_bridge": {
+      "command": "node",
+      "args": [
+        "${PLUGIN_ROOT}/server.mjs"
+      ],
+      "cwd": "${PLUGIN_ROOT}",
+      "enabled": true,
+      "env_vars": [
+        "USERPROFILE",
+        "HOME",
+        "HOMEDRIVE",
+        "HOMEPATH",
+        "PATH",
+        "SYSTEMROOT",
+        "APPDATA",
+        "LOCALAPPDATA",
+        "TEMP",
+        "TMP",
+        "DSH_AGENT_BRIDGE_HOME",
+        "CODEX_HOME"
+      ],
+      "startup_timeout_sec": 20,
+      "tool_timeout_sec": 90,
+      "default_tools_approval_mode": "approve"
+    }
+  }
+}

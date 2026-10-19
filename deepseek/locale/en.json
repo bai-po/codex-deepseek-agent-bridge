@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Agent Bridge",
+    "description": "Bidirectional task bridge between DeepSeek Harness and Codex: Codex agents can send tasks into this DSH session, and DSH agents can send tasks to an existing Codex thread and read the reply."
+  }
+}

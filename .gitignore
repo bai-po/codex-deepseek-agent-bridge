@@ -1,0 +1,8 @@
+node_modules/
+work/
+*.log
+*.bak
+endpoint.json
+token
+audit.jsonl
+.DS_Store

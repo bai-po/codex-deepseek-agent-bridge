@@ -1,0 +1,23 @@
+# Agent Bridge bundle layer (Codex ⇄ DeepSeek Harness).
+#
+# The row is inserted over the profile root that @deepseek-ai/dsh-base builds, so
+# it composes with the running desktop. Removing this file, disabling the row in
+# the profile's own cordis.patch.yml, or removing the bundle unloads the bridge;
+# the desktop keeps working unchanged.
+#
+# Config keys (all optional, defaults live in index.js):
+#   prefix         route prefix on DSH's own loopback web server (default /agent-bridge)
+#   stateDir       durable state: token, endpoint.json, tasks.json, audit.jsonl
+#   workspaceRoot  workspace used to pick a default DSH session / default Codex thread
+#   codexBin       explicit path to codex.exe (default: probe PATH and known installs)
+#   autoNotify     accept POST /events from the Codex Stop hook (default true)
+#   maxWaitMs      longest long-poll for POST /tasks/{id}/wait (default 30000)
+- insert:
+    - id: agent-bridge
+      name: dsh-agent-bridge
+      config:
+        prefix: /agent-bridge
+        workspaceRoot: !!js "process.cwd()"
+        autoNotify: false
+
+

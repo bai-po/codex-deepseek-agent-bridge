@@ -1,0 +1,36 @@
+{
+  "name": "deepseek-bridge",
+  "version": "1.0.3-local.2",
+  "description": "Codex side of the local Agent Bridge: lets Codex send tasks to the local DeepSeek Harness agent over 127.0.0.1 and poll for its reply.",
+  "author": {
+    "name": "Agent Bridge contributors"
+  },
+  "license": "MIT",
+  "keywords": [
+    "agent-bridge",
+    "deepseek",
+    "dsh",
+    "mcp",
+    "local"
+  ],
+  "mcpServers": "./.mcp.json",
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Agent Bridge — Codex版",
+    "shortDescription": "Send tasks to the local DeepSeek Harness agent",
+    "longDescription": "通过本机认证桥接连接 Codex 与 DeepSeek Harness，支持会话编号、任务列表和修订、可恢复删除及双方确认闭环。",
+    "developerName": "Agent Bridge contributors",
+    "category": "Developer Tools",
+    "capabilities": [
+      "Read",
+      "Write"
+    ],
+    "defaultPrompt": [
+      "登记当前聊天的桥接编号",
+      "列出桥接任务并查看结果"
+    ],
+    "brandColor": "#4D6BFE",
+    "logo": "./assets/icon-256.png",
+    "composerIcon": "./assets/icon-128.png"
+  }
+}

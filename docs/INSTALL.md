@@ -20,7 +20,7 @@ pwsh -NoProfile -File ./scripts/install.ps1 -Target Both -HostStopped
 
 若标签未发布，固定发布页给出的完整提交 SHA，不把未验证 main 当作验收版本。可以使用 `-Target Codex` 或 `DeepSeek` 单端安装。`-InstallRoot` 指定持久版本目录，默认从平台 Documents（MyDocuments）发现。DeepSeek 默认从 UserProfile 下 `.dsh/profiles/desktop` 发现 profile；非默认 profile 显式传 `-DeepSeekProfile <目录>`。`-CodexCommand <CLI路径>` 可选择 CLI。
 
-Codex 安装使用版本副本的 `.agents/plugins/marketplace.json`，执行公开 `codex plugin marketplace add <副本目录>`、`codex plugin add <插件名>@<marketplace名>`。脚本先探测 CLI help，不手工修改 Codex 配置。重复注册以本机 CLI 实际结果为准，错误不得称安装完成。
+Codex 安装使用版本副本的 `.agents/plugins/marketplace.json`，通过公开 `codex plugin marketplace` 与 `codex plugin add` 命令注册、安装并核对插件版本。若 Codex 已登记同名 marketplace，脚本先确认原路径存在且其 marketplace 清单和插件清单都指向 Agent Bridge，再备份配置、移除旧来源并注册新版本；验证失败时恢复旧来源和插件。无法确认旧来源时保留现有配置并停止。旧版本目录始终保留。脚本先探测 CLI 对 JSON 输出的支持，不手工改写 Codex 配置；失败不得称安装完成。
 
 DeepSeek profile 修改 dependencies 的 dsh-agent-bridge link 与 dsh.profile.bundles；保留其他依赖、bundle、用户字段。实际变更前在 profile 旁保存 UTC 时间命名备份，JSON 使用 UTF-8 无 BOM。Windows 下同时更新 profile/node_modules/dsh-agent-bridge 的真实 Junction：先验证原路径确为同名包，将旧 Junction 或实体目录改名为唯一时间戳备份，再建立指向新版本 deepseek 的 Junction，并读取实际包版本核对。重试同一目标不重复备份。遇到非预期包、普通文件、无包清单目录或损坏链接明确拒绝，不递归删除。Junction 创建失败时尽力恢复旧名称并报错；失败后应检查终端给出的备份路径，不声称安装成功。
 

@@ -35,12 +35,16 @@ if ($deepseekSelected) {
 $marketplaceManifest = Join-Path $sourceRoot '.agents/plugins/marketplace.json'
 if ($codexSelected -and !(Test-Path -LiteralPath $marketplaceManifest)) { throw "缺少本地 marketplace 清单：$marketplaceManifest" }
 if ($codexSelected) {
-  & $CodexCommand plugin marketplace add --help | Out-Null
-  if ($LASTEXITCODE -ne 0) { throw 'Codex CLI 不支持 marketplace add；请升级或使用公开插件管理入口。' }
-  & $CodexCommand plugin add --help | Out-Null
-  if ($LASTEXITCODE -ne 0) { throw 'Codex CLI 不支持 plugin add。' }
+  $marketplaceListHelp = & $CodexCommand plugin marketplace list --help 2>&1
+  if ($LASTEXITCODE -ne 0 -or (@($marketplaceListHelp) -join [Environment]::NewLine) -notmatch '--json') { throw 'Codex CLI 需要支持 plugin marketplace list --json；请升级 Codex CLI。' }
+  $marketplaceRemoveHelp = & $CodexCommand plugin marketplace remove --help 2>&1
+  if ($LASTEXITCODE -ne 0 -or (@($marketplaceRemoveHelp) -join [Environment]::NewLine) -notmatch '--json') { throw 'Codex CLI 需要支持 plugin marketplace remove --json；请升级 Codex CLI。' }
+  $marketplaceAddHelp = & $CodexCommand plugin marketplace add --help 2>&1
+  if ($LASTEXITCODE -ne 0 -or (@($marketplaceAddHelp) -join [Environment]::NewLine) -notmatch '--json') { throw 'Codex CLI 需要支持 plugin marketplace add --json；请升级 Codex CLI。' }
+  $pluginAddHelp = & $CodexCommand plugin add --help 2>&1
+  if ($LASTEXITCODE -ne 0 -or (@($pluginAddHelp) -join [Environment]::NewLine) -notmatch '--json') { throw 'Codex CLI 需要支持 plugin add --json；请升级 Codex CLI。' }
 }
-$plan = [ordered]@{ target=$Target; version=$version; destination=$destination; profile=$profileManifest; dryRun=[bool]$DryRun; backup='写入前保存 profile；版本目录存在则逐文件核对，不覆盖'; codex='通过 codex plugin marketplace add / plugin add 注册版本副本' }
+$plan = [ordered]@{ target=$Target; version=$version; destination=$destination; profile=$profileManifest; dryRun=[bool]$DryRun; backup='写入前保存 profile；版本目录存在则逐文件核对，不覆盖'; codex='通过 Codex CLI 注册并安装版本副本；遇到同名旧本地 marketplace 时先核验来源，再备份配置、切换并验证版本，失败时恢复旧来源' }
 $plan | ConvertTo-Json
 if ($DryRun) { return }
 if (!$HostStopped) { throw '请先保存工作并暂停/退出相关宿主，再传 -HostStopped；脚本不会终止进程。' }
@@ -106,9 +110,115 @@ if ($codexSelected) {
   }
   $marketplace = Get-Content -LiteralPath (Join-Path $destination '.agents/plugins/marketplace.json') -Raw | ConvertFrom-Json
   $plugin = Get-Content -LiteralPath (Join-Path $destination 'codex/.codex-plugin/plugin.json') -Raw | ConvertFrom-Json
-  & $CodexCommand plugin marketplace add $destination
-  if ($LASTEXITCODE -ne 0) { throw 'Codex marketplace 注册失败；保留版本副本以供检查。' }
-  & $CodexCommand plugin add "$($plugin.name)@$($marketplace.name)"
-  if ($LASTEXITCODE -ne 0) { throw 'Codex 插件安装失败；请根据 CLI 输出恢复，不能视为安装完成。' }
+
+  function Invoke-CodexCli([string[]]$CommandArgs) {
+    try {
+      $output = & $CodexCommand @CommandArgs 2>&1
+      $exitCode = $LASTEXITCODE
+    } catch {
+      return [PSCustomObject]@{ exitCode=127; text=$_.Exception.Message }
+    }
+    return [PSCustomObject]@{ exitCode=$exitCode; text=(@($output) -join [Environment]::NewLine) }
+  }
+  function Read-CodexJson($result, [string]$action) {
+    if ($result.exitCode -ne 0) { throw "Codex $action 失败：$($result.text)" }
+    try { return ($result.text | ConvertFrom-Json) }
+    catch { throw "Codex $action 未返回有效 JSON：$($result.text)" }
+  }
+  function Get-CodexMarketplaces {
+    $result = Invoke-CodexCli @('plugin','marketplace','list','--json')
+    return Read-CodexJson $result 'marketplace list'
+  }
+  function Get-CodexPluginManifest([string]$rootPath, [string]$pluginName) {
+    $manifestPath = Join-Path $rootPath 'codex/.codex-plugin/plugin.json'
+    if (!(Test-Path -LiteralPath $manifestPath)) { $manifestPath = Join-Path $rootPath 'codex/plugin.json' }
+    if (!(Test-Path -LiteralPath $manifestPath)) { throw "无法确认旧 marketplace 的插件清单：$manifestPath" }
+    $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+    if ($manifest.name -ne $pluginName) { throw "旧 marketplace 插件不匹配：$($manifest.name)" }
+    return $manifest
+  }
+  function Assert-AgentBridgeMarketplace([string]$rootPath, [string]$marketplaceName, [string]$pluginName) {
+    $manifestPath = Join-Path $rootPath '.agents/plugins/marketplace.json'
+    if (!(Test-Path -LiteralPath $manifestPath)) { throw "旧 marketplace 清单不存在：$manifestPath" }
+    $oldMarketplace = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+    if ($oldMarketplace.name -ne $marketplaceName) { throw "旧 marketplace 名称不匹配：$($oldMarketplace.name)" }
+    $entries = @($oldMarketplace.plugins | Where-Object { $_.name -eq $pluginName })
+    if ($entries.Count -ne 1 -or !$entries[0].source.path) { throw "旧 marketplace 未唯一登记插件 $pluginName；保留现有配置。" }
+    $oldPluginRoot = Join-Path $rootPath ([string]$entries[0].source.path)
+    $manifestPath = Join-Path $oldPluginRoot '.codex-plugin/plugin.json'
+    if (!(Test-Path -LiteralPath $manifestPath)) { $manifestPath = Join-Path $oldPluginRoot 'plugin.json' }
+    if (!(Test-Path -LiteralPath $manifestPath)) { throw "旧插件清单不存在：$manifestPath" }
+    $oldPlugin = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+    if ($oldPlugin.name -ne $pluginName) { throw "旧 marketplace 指向了不同插件：$($oldPlugin.name)" }
+    return $oldPlugin
+  }
+  function Get-FullPathKey([string]$value) {
+    return [IO.Path]::GetFullPath($value).TrimEnd([char[]]@([IO.Path]::DirectorySeparatorChar,[IO.Path]::AltDirectorySeparatorChar))
+  }
+
+  $selector = "$($plugin.name)@$($marketplace.name)"
+  $marketplaceState = Get-CodexMarketplaces
+  $existing = @($marketplaceState.marketplaces | Where-Object { $_.name -eq $marketplace.name })
+  if ($existing.Count -gt 1) { throw "Codex 中有多个同名 marketplace $($marketplace.name)；保留现有配置，未切换。" }
+  $previousRoot = $null
+  $previousPlugin = $null
+  $previousWasRemoved = $false
+  $newWasAdded = $false
+  if ($existing.Count -eq 1) {
+    $previousRoot = [string]$existing[0].root
+    if ((Get-FullPathKey $previousRoot) -ne (Get-FullPathKey $destination)) {
+      if (!(Test-Path -LiteralPath $previousRoot)) { throw "Codex 已登记的 marketplace 路径不存在；保留配置：$previousRoot" }
+      $previousPlugin = Assert-AgentBridgeMarketplace $previousRoot $marketplace.name $plugin.name
+      $remove = Invoke-CodexCli @('plugin','marketplace','remove',$marketplace.name,'--json')
+      if ($remove.exitCode -ne 0) { throw "Codex 旧 marketplace 移除失败；保留原配置：$($remove.text)" }
+      $previousWasRemoved = $true
+    }
+  }
+
+  try {
+    if ($existing.Count -eq 0 -or $previousWasRemoved) {
+      $add = Invoke-CodexCli @('plugin','marketplace','add',$destination,'--json')
+      if ($add.exitCode -ne 0) { throw "Codex 新 marketplace 注册失败：$($add.text)" }
+      $newWasAdded = $true
+      $added = Read-CodexJson $add 'marketplace add'
+      if ($added.marketplaceName -ne $marketplace.name -or (Get-FullPathKey ([string]$added.installedRoot)) -ne (Get-FullPathKey $destination)) {
+        throw 'Codex 注册到的 marketplace 名称或根目录与候选版本不符。'
+      }
+    }
+    $install = Invoke-CodexCli @('plugin','add',$selector,'--json')
+    if ($install.exitCode -ne 0) { throw "Codex 插件安装失败：$($install.text)" }
+    $installedPlugin = Read-CodexJson $install 'plugin add'
+    if ($installedPlugin.name -ne $plugin.name -or $installedPlugin.version -ne $version -or $installedPlugin.marketplaceName -ne $marketplace.name) {
+      throw 'Codex CLI 安装结果与目标插件版本不符。'
+    }
+  } catch {
+    $installFailure = $_.Exception.Message
+    if ($previousWasRemoved) {
+      $rollbackErrors = @()
+      if ($newWasAdded) {
+        $removeNew = Invoke-CodexCli @('plugin','marketplace','remove',$marketplace.name,'--json')
+        if ($removeNew.exitCode -ne 0) { $rollbackErrors += "移除新 marketplace 失败：$($removeNew.text)" }
+      }
+      if ($rollbackErrors.Count -eq 0) {
+        $restore = Invoke-CodexCli @('plugin','marketplace','add',$previousRoot,'--json')
+        if ($restore.exitCode -ne 0) { $rollbackErrors += "恢复旧 marketplace 失败：$($restore.text)" }
+        else {
+          $restorePlugin = Invoke-CodexCli @('plugin','add',"$($plugin.name)@$($marketplace.name)",'--json')
+          if ($restorePlugin.exitCode -ne 0) { $rollbackErrors += "恢复旧插件失败：$($restorePlugin.text)" }
+          else {
+            try {
+              $restored = Read-CodexJson $restorePlugin 'rollback plugin add'
+              if ($restored.name -ne $plugin.name -or $restored.version -ne $previousPlugin.version) { $rollbackErrors += '恢复后的插件版本与旧版本不符。' }
+            } catch { $rollbackErrors += $_.Exception.Message }
+          }
+        }
+      }
+      if ($rollbackErrors.Count -gt 0) { throw "Codex 新版注册失败且自动回滚不完整：$installFailure；$($rollbackErrors -join '；')。配置备份：$codexBackup" }
+      throw "Codex 新版注册失败，旧 marketplace 与插件已恢复：$installFailure"
+    }
+    throw "Codex 插件注册失败：$installFailure"
+  }
+  if ($previousWasRemoved) { Write-Output "Codex marketplace 已从旧目录切换到 $destination；旧版本文件保留：$previousRoot" }
+  Write-Output "Codex 插件已安装：$selector（$version）"
 }
 Write-Output '文件安装完成。重启宿主后按 docs/INSTALL.md 做工具发现、health 和真实互发验收。'

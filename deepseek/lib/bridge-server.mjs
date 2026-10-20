@@ -1,3 +1,4 @@
+import {legacyResultView} from './read-policy.mjs';
 /**
  * agent-bridge HTTP server (Codex → DSH direction).
  *
@@ -53,29 +54,29 @@ export function createBridgeServer({ ctx, store, config, codexRef, logger = cons
         throw new BridgeError('agent/session-not-found', 'sessionId 不在真实宿主会话名录；请调用 deepseek_status 核对实际 sessionId 后登记，不要猜测', 404)
       }
     },
-    async deliver({ target, task, eventId, content, replyRequired }) {
+    async deliver({ target, owner, task, eventId, content, replyRequired }) {
       if (target.side === 'deepseek') {
         if (content.length > MAX_SUMMARY) throw Object.assign(new BridgeError('request/too-large', `任务正文含投递头长度 ${content.length} 字符，当前上限 ${MAX_SUMMARY} 字符；请缩短或提供文件引用；未发送`, 413), { definitive: true })
-        const sent = await sendTask({ requestId: eventId, sessionId: target.sessionId, title: task.title, status: 'INFO', summary: content, mode: 'queue' })
+        const sent = await sendTask({ requestId: eventId, sessionId: target.sessionId, title: task.title, status: 'INFO', summary: content, mode: 'queue', replyRequired, replyThreadId: replyRequired ? owner.sessionId : undefined })
         return { state: 'queued', transportTaskId: sent.taskId, side: 'deepseek', replyRequired }
       }
       if (!codexRef.client) throw Object.assign(new Error('Codex客户端不可用；未发送'), { definitive: true })
       const sent = await codexRef.client.send({ threadId: target.sessionId, message: content, title: task.title, delivery: 'queue' })
-      const result = await codexRef.client.wait({ taskId: sent.taskId, waitMs: 10000 })
+      const result = await codexRef.client.status({ taskId: sent.taskId, metadataOnly: true })
       if (result.error) throw Object.assign(new Error(result.error.message), { code: result.error.code })
       return { state: result.state, transportTaskId: sent.taskId, side: 'codex', replyRequired, note: result.note ?? '队列命令处理中；尚未证实接收或消费。' }
     },
     async lookupLegacy({ legacyTaskId, legacyDirection }) {
       if (legacyDirection === 'codex-to-deepseek') {
         const t = tasks.get(legacyTaskId)
-        return t ? { title: t.title, content: t.summary, state: t.state, receipt: publicTask(t) } : undefined
+        return t ? { state: t.state } : undefined
       }
       if (!codexRef.client) return undefined
-      try { const t = await codexRef.client.status({ taskId: legacyTaskId }); return { title: '旧Codex桥接任务', content: t.reply || `旧任务 ${legacyTaskId}，正文不由历史结果接口暴露。`, state: t.state, receipt: t } } catch { return undefined }
+      try { const t = await codexRef.client.status({ taskId: legacyTaskId, metadataOnly: true }); return { state: t.state } } catch { return undefined }
     },
     async readReceipt({ receipt }) {
       if (receipt.side === 'deepseek') { const t = tasks.get(receipt.transportTaskId); return t ? { ...receipt, ...publicTask(t) } : receipt }
-      if (receipt.side === 'codex' && codexRef.client) return { ...receipt, ...await codexRef.client.status({ taskId: receipt.transportTaskId }) }
+      if (receipt.side === 'codex' && codexRef.client) return { ...receipt, ...await codexRef.client.status({ taskId: receipt.transportTaskId, metadataOnly: !lifecycle.isTransportClosed(receipt.transportTaskId) }) }
       return receipt
     },
   })
@@ -87,12 +88,14 @@ export function createBridgeServer({ ctx, store, config, codexRef, logger = cons
 
   /* ── task records ─────────────────────────────────────────────────── */
 
-  function createTask({ sessionId, cwd, title, status, summary, refs, baselineSeq, direction = 'codex->dsh' }) {
+  function createTask({ sessionId, cwd, title, status, summary, refs, baselineSeq, replyThreadId, replyRequired = true, direction = 'codex->dsh' }) {
     const taskId = `tsk_${randomUUID().replace(/-/gu, '').slice(0, 10)}`
     const now = isoNow()
     const task = {
       taskId,
       direction,
+      replyThreadId,
+      replyRequired,
       sessionId,
       cwd,
       title,
@@ -137,25 +140,7 @@ export function createBridgeServer({ ctx, store, config, codexRef, logger = cons
   }
 
   function publicTask(task) {
-    const replyText = task.reply?.text
-    return {
-      taskId: task.taskId,
-      state: task.state,
-      sessionId: task.sessionId,
-      cwd: task.cwd,
-      title: task.title,
-      status: task.status,
-      createdAt: task.createdAt,
-      updatedAt: task.updatedAt,
-      turnSeq: task.turnSeq ?? null,
-      matched: task.matched === true,
-      reply:
-        typeof replyText === 'string'
-          ? { text: clip(replyText, MAX_REPLY), at: task.reply.at, truncated: replyText.length > MAX_REPLY }
-          : null,
-      turnEnd: task.turnEnd ?? null,
-      ...(task.error === null ? {} : { error: task.error }),
-    }
+    return legacyResultView(task,lifecycle.isTransportClosed(task.taskId))
   }
 
   function settleWaiters(task) {
@@ -173,6 +158,8 @@ export function createBridgeServer({ ctx, store, config, codexRef, logger = cons
       status: task.status,
       summary: task.summary,
       refs: task.refs,
+      replyThreadId: task.replyThreadId,
+      replyRequired: task.replyRequired,
       state: task.state,
       createdAt: task.createdAt,
       updatedAt: task.updatedAt,
@@ -446,19 +433,29 @@ export function createBridgeServer({ ctx, store, config, codexRef, logger = cons
 
   /* ── Codex → DSH ──────────────────────────────────────────────────── */
 
-  function formatInjection({ taskId, status, title, summary, refs }) {
+  function formatInjection({ taskId, status, title, summary, refs, replyThreadId, replyRequired }) {
     const lines = [`📨 [Codex → DSH] ${status} ｜ ${title}`]
     if (summary.length > 0) lines.push(clip(summary, MAX_SUMMARY))
     if (refs.length > 0) lines.push(`refs: ${refs.join(' ; ')}`)
-    lines.push(`↩ 直接在本会话回复即可；Codex 端会用 taskId=${taskId} 读回结果。`)
+    if (replyRequired === false) lines.push('本通知不要求回复；不要向对方发送消息、确认或回执。')
+    else lines.push('回信目标 Codex threadId=' + replyThreadId + '；关联 taskId=' + taskId + '。请主动调用 codex_task(thread=' + replyThreadId + ', delivery=queue, message=含本taskId的实际进度/结果)发送回报。只在本会话回复或写报告文件不算投递；Codex不会主动读取未闭环内容。遇到工具不可用时如实标记未发送，禁止要求对方改为读文件。')
     return lines.join('\n')
   }
 
   async function sendTask(input, options = {}) {
+    const summary = asString(input?.summary) ?? ''
+    if (summary.length > MAX_SUMMARY) throw new BridgeError('request/too-large', `任务正文长度 ${summary.length} 字符，当前上限 ${MAX_SUMMARY} 字符；请缩短或提供文件引用；未发送`, 413)
+    const replyRequired = input?.replyRequired !== false
+    const marker = /^\[Agent Bridge Reply-To: codex ([0-9a-f-]{36})\]$/imu.exec(input?.summary ?? '')?.[1]
+    const explicit = asString(input?.replyThreadId)
+    if (marker && explicit && marker.toLowerCase() !== explicit.toLowerCase()) throw new BridgeError('reply/address-conflict','回信目标字段与显式Reply-To标记冲突',400)
+    const replyThreadId = explicit ?? marker
+    if (replyRequired && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu.test(replyThreadId ?? '')) throw new BridgeError('reply/address-required','必须提供当前真实Codex thread UUID作为replyThreadId，或在summary中提供显式[Agent Bridge Reply-To: codex <UUID>]标记；不能使用PID或猜最新会话',400)
     const requestId = asString(input?.requestId)
     if (requestId !== undefined && requestIds.has(requestId)) {
       const existing = tasks.get(requestIds.get(requestId))
       if (existing !== undefined) {
+        if (existing.replyThreadId && existing.replyThreadId !== replyThreadId) throw new BridgeError('request/conflict','幂等请求的回信目标不同',409)
         return {
           taskId: existing.taskId,
           sessionId: existing.sessionId,
@@ -470,8 +467,6 @@ export function createBridgeServer({ ctx, store, config, codexRef, logger = cons
     const title = clip(asString(input?.title) ?? '(无标题)', 200)
     const rawStatus = asString(input?.status)?.toUpperCase()
     const status = STATUSES.has(rawStatus) ? rawStatus : 'INFO'
-    const summary = asString(input?.summary) ?? ''
-    if (summary.length > MAX_SUMMARY) throw new BridgeError('request/too-large', `任务正文长度 ${summary.length} 字符，当前上限 ${MAX_SUMMARY} 字符；请缩短或提供文件引用；未发送`, 413)
     const refs = Array.isArray(input?.refs) ? input.refs.filter((item) => typeof item === 'string').slice(0, 10) : []
     const mode = input?.mode === 'steer' ? 'steer' : 'queue'
     const session = await pickSession(asString(input?.sessionId))
@@ -487,10 +482,12 @@ export function createBridgeServer({ ctx, store, config, codexRef, logger = cons
       summary,
       refs,
       baselineSeq,
+      replyThreadId,
+      replyRequired,
       direction: options.direction ?? 'codex->dsh',
     })
     follower.tasks.set(task.taskId, task)
-    const text = formatInjection({ taskId: task.taskId, status, title, summary, refs })
+    const text = formatInjection({ taskId: task.taskId, status, title, summary, refs, replyThreadId, replyRequired })
     try {
       await injectPrompt(session.sessionId, task.taskId, mode, text, options.signal)
     } catch (error) {      task.state = 'error'
@@ -557,38 +554,8 @@ export function createBridgeServer({ ctx, store, config, codexRef, logger = cons
    * Diagnostic tail: observes one session's follow stream for a short window
    * without injecting anything. Read-only, loopback + token guarded.
    */
-  async function debugFollow(params) {
-    const sessionId = asString(params.get('sessionId'))
-    if (sessionId === undefined) throw new BridgeError('request/bad-request', '缺少 sessionId', 400)
-    const ms = clampNumber(params.get('ms'), 200, 15000, 3000)
-    const frames = []
-    const controller = new AbortController()
-    const stream = ctx.sessionController.follow({ address: { kind: 'session', sessionId } }, controller.signal)
-    const deadline = setTimeout(() => controller.abort(), ms)
-    deadline.unref?.()
-    try {
-      for await (const frame of stream) {
-        if (frame?.type === 'snapshot') {
-          frames.push({ type: 'snapshot', cursor: frame.cursor })
-        } else if (frame?.type === 'event') {
-          frames.push({
-            type: 'event',
-            seq: frame.event?.seq,
-            kind: frame.event?.type,
-            text: clip(contentText(frame.event?.data?.content ?? frame.event?.data?.message?.content), 160),
-          })
-        } else {
-          frames.push({ type: String(frame?.type ?? 'unknown') })
-        }
-        if (frames.length >= 40) break
-      }
-    } catch (error) {
-      frames.push({ type: 'error', message: String(error?.message ?? error) })
-    } finally {
-      clearTimeout(deadline)
-      controller.abort()
-    }
-    return { sessionId, windowMs: ms, frames }
+  async function debugFollow() {
+    throw new BridgeError('content/push-only','全局会话正文调试不可作为主动拉取旁路；未闭环等待对方投递，闭环后仅按具体任务读取归档',403)
   }
 
   async function waitTask(taskId, waitMs) {
@@ -710,12 +677,17 @@ export function createBridgeServer({ ctx, store, config, codexRef, logger = cons
     return {
       version,
       protocol: 1,
+      readPolicy: 'push-only-until-closed',
       workspaceRoot,
       dsh: {
         sessions: sessions.length,
         running: sessions.filter((item) => item.running === true).length,
       },
       codex: codexStatus(),
+      toolRegistrationErrors: {
+        codexTools: codexRef.toolRegistrationErrors?.codexTools ?? null,
+        lifecycleTools: codexRef.toolRegistrationErrors?.lifecycleTools ?? null,
+      },
       tasks: { open, total: tasks.size },
     }
   }

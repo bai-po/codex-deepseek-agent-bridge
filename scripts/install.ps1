@@ -1,4 +1,4 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param(
   [ValidateSet('Codex','DeepSeek','Both')][string]$Target = 'Both',
   [switch]$DryRun,
@@ -7,6 +7,7 @@ param(
   [string]$CodexCommand = 'codex',
   [switch]$HostStopped
 )
+if ($PSVersionTable.PSVersion.Major -lt 7) { throw 'PowerShell 7+ is required; run this installer with pwsh. Windows PowerShell 5.1 is not supported.' }
 $ErrorActionPreference = 'Stop'
 $sourceRoot = Split-Path $PSScriptRoot -Parent
 $version = (Get-Content -LiteralPath (Join-Path $sourceRoot 'package.json') -Raw | ConvertFrom-Json).version

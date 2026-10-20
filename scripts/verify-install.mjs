@@ -20,12 +20,15 @@ export async function verify(root = path.resolve(path.dirname(fileURLToPath(impo
   for (const file of ['codex/server.mjs','deepseek/index.js','codex/MANUAL.md','deepseek/MANUAL.md','docs/INSTALL.md','LICENSE']) {
     await access(path.join(root,file)); results.push(file);
   }
-  for (const file of ['lifecycle.mjs','contracts.mjs']) {
+  for (const file of ['lifecycle.mjs','contracts.mjs','read-policy.mjs']) {
     const source = await readFile(path.join(root,'shared',file));
     const packaged = await readFile(path.join(root,'deepseek/lib',file));
     if (!source.equals(packaged)) throw new Error(file + ': shared/deepseek runtime byte mismatch');
     results.push('shared/' + file + ' == deepseek/lib/' + file);
   }
+  const codexPolicy = await readFile(path.join(root,'codex/lib/read-policy.mjs'));
+  if (!(await readFile(path.join(root,'shared/read-policy.mjs'))).equals(codexPolicy)) throw new Error('read-policy.mjs: shared/codex runtime byte mismatch');
+  results.push('shared/read-policy.mjs == codex/lib/read-policy.mjs');
   return { version: pkg.version, checked: results, scope: '静态文件与版本检查；不证明宿主加载、消息投递或功能验收' };
 }
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

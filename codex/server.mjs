@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import {legacyResultView,taskResultView} from './lib/read-policy.mjs';
 /**
  * deepseek-bridge MCP server (Codex side of the local Agent Bridge)
  *
@@ -18,7 +19,7 @@
 
 import { createInterface } from "node:readline";
 import { request as httpRequest } from "node:http";
-import { readFile, readdir, stat, open } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
 import { fileURLToPath } from "node:url";
@@ -31,7 +32,7 @@ const DEFAULT_PROTOCOL_VERSION = "2025-06-18";
 
 const HTTP_TIMEOUT_MS = 15_000;
 const PING_TIMEOUT_MS = 4_000;
-const WAIT_DEFAULT_MS = 10_000;
+const WAIT_DEFAULT_MS = 0;
 const WAIT_MAX_MS = 30_000;
 const SUMMARY_LIMIT = 4_000;
 const TASK_STATUSES = new Set(["DONE", "BLOCKED", "QUESTION", "INFO"]);
@@ -398,6 +399,12 @@ async function toolDeepseekTask(args) {
   const refs = Array.isArray(args.refs) ? args.refs.filter((item) => typeof item === "string" && item.trim()).map((item) => item.trim()) : [];
   const sessionId = asString(args.session ?? args.sessionId).trim();
   if (summaryRaw.length > SUMMARY_LIMIT) throw new BridgeError("request/too-large", `Summary length ${summaryRaw.length} characters exceeds current limit ${SUMMARY_LIMIT}; shorten it or provide file references; nothing sent.`, { currentLength: summaryRaw.length, limit: SUMMARY_LIMIT });
+  const replyRequired = args.replyRequired !== false;
+  const marker = /^\[Agent Bridge Reply-To: codex ([0-9a-f-]{36})\]$/imu.exec(summaryRaw)?.[1];
+  const explicit = asString(args.replyThreadId).trim();
+  if (explicit && marker && explicit.toLowerCase() !== marker.toLowerCase()) throw badRequest('Reply-To address conflict');
+  const replyThreadId = explicit || marker;
+  if (replyRequired && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu.test(replyThreadId ?? '')) throw badRequest('replyThreadId must be your actual current Codex thread UUID, or provide the explicit Agent Bridge Reply-To marker; no PID/latest fallback');
   const summary = summaryRaw;
   const truncated = false;
 
@@ -408,7 +415,9 @@ async function toolDeepseekTask(args) {
     status,
     summary,
     mode,
-    replyTo: `codex:${process.pid}`,
+    replyThreadId,
+    replyRequired,
+    replyTo: replyThreadId ? {side:"codex",threadId:replyThreadId} : null,
   };
   if (refs.length) body.refs = refs;
   if (sessionId) body.sessionId = sessionId;
@@ -439,6 +448,7 @@ async function toolDeepseekResult(args) {
   waitMs = Math.max(0, Math.min(WAIT_MAX_MS, Math.floor(waitMs)));
 
   const bridge = await loadBridge();
+  await requirePushOnlyService(bridge);
   const taskPath = `tasks/${encodeURIComponent(taskId)}`;
   const value =
     waitMs > 0
@@ -446,199 +456,11 @@ async function toolDeepseekResult(args) {
       : await httpJson(bridge, "GET", taskPath, undefined, HTTP_TIMEOUT_MS);
 
   const task = value && typeof value === "object" ? value : {};
-  return {
-    ok: true,
-    taskId: task.taskId ?? taskId,
-    state: task.state ?? null,
-    sessionId: task.sessionId ?? null,
-    cwd: task.cwd ?? null,
-    title: task.title ?? null,
-    turnSeq: task.turnSeq ?? null,
-    reply: task.reply ?? null,
-    turnEnd: task.turnEnd ?? null,
-    updatedAt: task.updatedAt ?? null,
-    waitedMs: waitMs,
-  };
+  const archiveAllowed = task.archiveAvailable === true && task.readPolicy === 'closed-archive';
+  return {ok:true,...legacyResultView({...task,taskId:task.taskId ?? taskId,waitedMs:waitMs},archiveAllowed)};
 }
 
-/* ---------------------------------------------------- rollout (hook helper) */
-
-const rolloutCache = new Map();
-
-function sortDesc(entries) {
-  return [...entries].sort((a, b) => b.name.localeCompare(a.name));
-}
-
-async function listDirs(dir) {
-  try {
-    const entries = await readdir(dir, { withFileTypes: true });
-    return sortDesc(entries.filter((entry) => entry.isDirectory()));
-  } catch {
-    return [];
-  }
-}
-
-/** Locate rollout-*.jsonl whose name ends with -<sessionId>.jsonl, newest dirs first. */
-async function findRolloutForSession(sessionId) {
-  if (!sessionId || !/^[A-Za-z0-9-]{8,64}$/.test(sessionId)) return null;
-  const cached = rolloutCache.get(sessionId);
-  if (cached) return cached;
-
-  const root = path.join(codexHome(), "sessions");
-  let scanned = 0;
-  for (const year of await listDirs(root)) {
-    for (const month of await listDirs(path.join(root, year.name))) {
-      for (const day of await listDirs(path.join(root, year.name, month.name))) {
-        if (++scanned > 400) return null;
-        const dir = path.join(root, year.name, month.name, day.name);
-        let names;
-        try {
-          names = await readdir(dir);
-        } catch {
-          continue;
-        }
-        const suffix = `-${sessionId}.jsonl`;
-        const hit = names.filter((name) => name.startsWith("rollout-") && name.endsWith(suffix)).sort().pop();
-        if (hit) {
-          const file = path.join(dir, hit);
-          rolloutCache.set(sessionId, file);
-          return file;
-        }
-      }
-    }
-  }
-  return null;
-}
-
-/** Read the tail of a rollout file and return the last assistant message text. */
-async function extractLastAssistantText(file, tailBytes = 512 * 1024) {
-  let handle;
-  try {
-    handle = await open(file, "r");
-    const info = await handle.stat();
-    const length = Math.min(tailBytes, info.size);
-    const start = info.size - length;
-    const buffer = Buffer.alloc(length);
-    await handle.read(buffer, 0, length, start);
-    let text = buffer.toString("utf8");
-    if (start > 0) {
-      const firstNewline = text.indexOf("\n");
-      text = firstNewline === -1 ? "" : text.slice(firstNewline + 1);
-    }
-    const lines = text.split(/\r?\n/).filter((line) => line.trim());
-    for (let index = lines.length - 1; index >= 0; index -= 1) {
-      let entry;
-      try {
-        entry = JSON.parse(lines[index]);
-      } catch {
-        continue;
-      }
-      const candidate = assistantTextFromEntry(entry);
-      if (candidate) return candidate;
-    }
-    return "";
-  } catch {
-    return "";
-  } finally {
-    if (handle) await handle.close().catch(() => {});
-  }
-}
-
-function assistantTextFromEntry(entry) {
-  if (!entry || typeof entry !== "object") return "";
-  const payload = entry.payload;
-  if (!payload || typeof payload !== "object") return "";
-
-  // Canonical Codex rollout shape: response_item / message / assistant / output_text
-  if (entry.type === "response_item" && payload.type === "message" && payload.role === "assistant") {
-    const parts = Array.isArray(payload.content) ? payload.content : [];
-    const text = parts
-      .filter((part) => part && (part.type === "output_text" || part.type === "text") && typeof part.text === "string")
-      .map((part) => part.text)
-      .join("\n")
-      .trim();
-    return text;
-  }
-  // Older/alternate shapes.
-  if (entry.type === "event_msg" && payload.type === "agent_message" && typeof payload.message === "string") {
-    return payload.message.trim();
-  }
-  if (payload.type === "agent_message" && typeof payload.message === "string") {
-    return payload.message.trim();
-  }
-  return "";
-}
-
-async function toolDeepseekReportTurnEnd(args) {
-  const sessionId = asString(args.session_id ?? args.sessionId).trim();
-  const turnId = asString(args.turn_id ?? args.turnId).trim();
-  const hookEventName = asString(args.hook_event_name) || "Stop";
-
-  // Hook tools must never fail the Codex turn: collect whatever we can, report status.
-  const outcome = {
-    ok: false,
-    delivered: false,
-    hookEventName,
-    sessionId: sessionId || null,
-    turnId: turnId || null,
-    rolloutPath: null,
-    summaryChars: 0,
-  };
-
-  try {
-    const rolloutPath = await findRolloutForSession(sessionId);
-    outcome.rolloutPath = rolloutPath || null;
-    if (rolloutPath) {
-      const text = await extractLastAssistantText(rolloutPath);
-      outcome.summaryChars = text.length;
-      const { text: summary } = truncate(text || `Codex turn finished (${hookEventName})`, 2000);
-      const bridge = await loadBridge();
-      const value = await httpJson(
-        bridge,
-        "POST",
-        "events",
-        {
-          kind: "codex-turn-end",
-          threadId: sessionId || turnId || "unknown",
-          title: asString(args.title) || undefined,
-          summary,
-          status: "DONE",
-        },
-        HTTP_TIMEOUT_MS,
-      );
-      outcome.ok = true;
-      outcome.delivered = Boolean(value && value.delivered);
-      outcome.taskId = value && value.taskId ? value.taskId : null;
-      if (value && value.reason) outcome.reason = value.reason;
-      return outcome;
-    }
-
-    // No rollout found: still try to notify the bridge with a minimal payload.
-    const bridge = await loadBridge();
-    const value = await httpJson(
-      bridge,
-      "POST",
-      "events",
-      {
-        kind: "codex-turn-end",
-        threadId: sessionId || turnId || "unknown",
-        summary: `Codex turn finished (${hookEventName}); no rollout transcript found for this session.`,
-        status: "DONE",
-      },
-      HTTP_TIMEOUT_MS,
-    );
-    outcome.ok = true;
-    outcome.delivered = Boolean(value && value.delivered);
-    outcome.taskId = value && value.taskId ? value.taskId : null;
-    if (value && value.reason) outcome.reason = value.reason;
-    return outcome;
-  } catch (err) {
-    outcome.error = toToolError(err);
-    return outcome;
-  }
-}
-
-/* ------------------------------------------------------------ tool registry */
+async function toolDeepseekReportTurnEnd() { return {ok:true,delivered:false,reason:'disabled',readPolicy:'push-only-until-closed',note:'Legacy Stop reporting is disabled; no rollout read and no automatic message.'}; }
 
 const TOOLS = [
   {
@@ -646,12 +468,14 @@ const TOOLS = [
     title: "Send task to DeepSeek",
     description:
       "Hand a self-contained task to the local DeepSeek Harness (DSH) agent over 127.0.0.1. " +
-      "Returns a taskId; use deepseek_result to read the agent's answer. " +
+      "Returns a transport taskId. DeepSeek must actively push replies to replyThreadId using codex_task; never read/poll an open conversation or report file. deepseek_result exposes status only until verified bilateral closure. " +
       "The DSH agent does not see this Codex conversation, so put every needed fact, path and constraint in `summary` " +
       "(<= 4000 chars; longer text is rejected without sending).",
     inputSchema: {
       type: "object",
       properties: {
+        replyThreadId: { type: "string", description: "Your actual current Codex thread UUID for DeepSeek to push its reply. Required unless summary has an explicit Agent Bridge Reply-To marker; never PID/latest." },
+        replyRequired: { type: "boolean", description: "False only for an explicitly no-reply notice; do not acknowledge closure notices." },
         title: { type: "string", description: "Short task title (max 200 chars)." },
         status: {
           type: "string",
@@ -685,10 +509,10 @@ const TOOLS = [
   },
   {
     name: "deepseek_result",
-    title: "Read DeepSeek task result",
+    title: "DeepSeek task status or closed archive",
     description:
-      "Read the current state of a task previously sent with deepseek_task, optionally waiting up to 30 s for new activity. " +
-      "Returns state (queued|running|done|error), reply text, and the DSH turn-end marker.",
+      "Read metadata-only state; never pull peer content before bilateral closure. Wait for DeepSeek to actively push its message. Closed tasks alone permit scoped archive reads. Read the state of a task previously sent with deepseek_task, optionally waiting up to 30 s for new activity. " +
+      "waitMs defaults to 0 for an immediate status read; a positive value sends one POST /tasks/{id}/wait (maximum 30000 ms) to wait for state changes only. Open-task content remains filtered and reply=null. This is not a peer-reply wait. done is a completed turn, never bilateral closure. Do not repeatedly poll; peer results arrive by pushed message.",
     inputSchema: {
       type: "object",
       properties: {
@@ -697,7 +521,7 @@ const TOOLS = [
           type: "integer",
           minimum: 0,
           maximum: 30000,
-          description: "Milliseconds to wait for new activity (default 10000, max 30000). 0 = poll immediately.",
+          description: "Default 0; positive values make one metadata-only POST /tasks/{id}/wait (max 30000 ms). Open-task content remains filtered.",
         },
       },
       required: ["taskId"],
@@ -716,8 +540,7 @@ const TOOLS = [
     name: "deepseek_report_turn_end",
     title: "Report Codex turn end",
     description:
-      "Internal hook target: tell the Agent Bridge that one Codex turn just ended, attaching the last assistant message " +
-      "from the Codex rollout. Invoked automatically by the plugin's Stop hook; never fails the turn.",
+      "Disabled compatibility entry: no rollout reads, no automatic messages and no HTTP request. Never use it to answer closure notices.",
     inputSchema: {
       type: "object",
       properties: {
@@ -853,14 +676,21 @@ async function toolBridgeAgent(args) {
 async function toolBridgeTask(args) {
   validateV2(args, TASK_SCHEMA);
   // Service owns action-specific required fields, identity, state and revision validation.
-  return await httpJson(await loadBridge(), "POST", "v2/task", { ...args, side: "codex" });
+  const bridge = await loadBridge();
+  await requirePushOnlyService(bridge);
+  const value = await httpJson(bridge, "POST", "v2/task", { ...args, side: "codex" });
+  return taskResultView(value, args.actorId);
+}
+async function requirePushOnlyService(bridge) {
+  const health = await httpJson(bridge, "GET", "health");
+  if (health?.readPolicy !== 'push-only-until-closed') throw new BridgeError('bridge/upgrade-required', '当前服务不支持未闭环正文保护；未请求任务内容。请升级并核对实际加载版本，等待对方主动发送消息，不改读报告。');
 }
 async function toolBridgeManual() {
   return { uri: "bridge://manual", text: await readFile(fileURLToPath(new URL("./MANUAL.md", import.meta.url)), "utf8") };
 }
 TOOLS.push(
  { name: "bridge_agent", title: "Bridge agent identity", description: "Register/list/get persistent routing identities. Caller must supply the actual current Codex thread UUID; this is not authenticated host session identity. Never guess latest. First registration returns agentKey once: keep it private locally, never send it to the other agent or write it to a repository. Existing alias changes require agentKey. Side is codex.", inputSchema: AGENT_SCHEMA },
- { name: "bridge_task", title: "Bridge task lifecycle", description: "Create/list/get/edit/delete/restore/send/refresh/correct/complete/confirm/close/reopen/import through authenticated HTTP. Every bridge_task action requires actorId and its private agentKey; keep the key locally, never send it to another agent or commit it. Deleting a bridge record is recoverable and does not retract delivered content or cancel recipient work. Sent content needs an explicit correct revision. Close only after bilateral confirmation; the closure notice uses replyRequired=false and must not receive subsequent automatic replies. Action-specific fields, ownership and expectedRevision are checked at runtime by the lifecycle service.", inputSchema: TASK_SCHEMA },
+ { name: "bridge_task", title: "Bridge task lifecycle", description: "Create/list/get/edit/delete/restore/send/refresh/correct/complete/confirm/close/reopen/import through authenticated HTTP. Open outputs omit peer content and evidence; never pull peer reports from files or transcripts. Wait for an actively pushed message; done is not closure. Every bridge_task action requires actorId and its private agentKey; keep the key locally, never send it to another agent or commit it. Deleting a bridge record is recoverable and does not retract delivered content or cancel recipient work. Sent content needs an explicit correct revision. Close only after bilateral confirmation; the closure notice uses replyRequired=false and must not receive subsequent automatic replies. Action-specific fields, ownership and expectedRevision are checked at runtime by the lifecycle service.", inputSchema: TASK_SCHEMA },
  { name: "bridge_manual", title: "Bridge manual", description: "Read packaged Codex manual, also available as bridge://manual.", inputSchema: { type: "object", properties: {}, additionalProperties: false } }
 );
 

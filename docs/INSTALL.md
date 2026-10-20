@@ -1,11 +1,11 @@
 # 安装、升级、卸载与回滚
 
-要求 Node.js 22+、PowerShell 7+、Git、Codex CLI 和 DeepSeek Harness。保存所有工作并暂停或退出相关宿主；安装器不会强杀进程。
+要求 Node.js 22+、PowerShell 7+、Git、Codex CLI 和 DeepSeek Harness。Windows PowerShell 5.1（系统自带 `powershell.exe`）不兼容安装器；必须安装 PowerShell 7 并通过 `pwsh` 执行 `scripts/install.ps1`。脚本在任何文件操作前检查版本并拒绝 5.1。保存所有工作并暂停或退出相关宿主；安装器不会强杀进程。
 
 ```powershell
 git clone https://github.com/bai-po/codex-deepseek-agent-bridge.git
 Set-Location codex-deepseek-agent-bridge
-git checkout v1.0.3-local.3
+git checkout v1.0.4
 node --version
 pwsh --version
 codex plugin --help

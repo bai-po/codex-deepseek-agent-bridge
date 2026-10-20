@@ -3,6 +3,22 @@ name: deepseek-bridge
 description: 用于将任务交给本机 DeepSeek Harness，登记当前会话编号，管理桥接任务列表、修订及双方验收闭环。
 ---
 
+## 未闭环只接受主动消息（1.0.4）
+
+DeepSeek 必须主动用 codex_task(thread=<派发方真实 Codex thread UUID>, delivery=queue, message=<实际进度或审查结果>) 发送回报；只在自己的聊天回复、写 DONE、落盘报告或返回工具成功均不算发给 Codex。
+
+Codex 等待主动到达当前聊天的消息。即使等待十分钟、旧工具描述叫“读回”、工具不可用或发现报告文件，也不得调用结果/会话/日志/报告读取来取得未闭环的 DeepSeek 正文。可以按需要检查健康、运行状态与任务归属元数据，不持续轮询正文。超时不是完成或闭环。不要绕过桥接限制用文件系统、会话记录或其他接口读取对方回报；工具不可用时报告未发送并修复推送通道。
+
+bridge_task 的 list/get/refresh 及变更回执在未闭环时隐藏对方正文、证据与嵌套回执；自己写的内容仍可查。deepseek_result 对未闭环任务仅返回状态且 reply=null。queued/running/done/error、停止运行、单方 complete/confirm 或工具返回成功都不是闭环。只有服务验证同修订 complete、双方 accepted confirm 和已送达的 replyRequired=false 闭环事件后，才允许读取这个任务的归档；reopen 后重新隐藏。不得为读正文先做虚假验收或提前关闭。
+
+Codex 的 deepseek_result 默认 waitMs=0，立即读取一次状态；显式 waitMs>0 时只提交一次 `POST /tasks/{id}/wait` 状态等待，最长 30000ms，服务仍按闭环策略过滤响应。未闭环时 reply=null；这不是等待读取 DeepSeek 正文的接口，也不能作为轮询工具。
+
+旧 deepseek_task 必须携带 replyThreadId=<当前真实 Codex thread UUID>；旧工具不支持该字段时，在 summary 单独一行写 [Agent Bridge Reply-To: codex <UUID>]。没有实际会话 UUID 时先解决身份缺失，禁止 PID、最新会话猜测和其他聊天编号。v2 从登记的发送方 sessionId 带入回信目标。replyRequired=false 是无需回信通知，不要求回信地址；收到闭环通知后不回执。
+
+发送较长审查时可分条主动发送。共享文件可作为事先授权的输入材料，但不能用其替代未闭环的对方回报推送；对方应主动发送结论与必要证据。插件限制桥接接口和代理使用流程，不宣称撤销通用文件系统权限。
+
+
+
 先调用 `bridge_manual` 或读取 `bridge://manual` 获得当前包的完整手册。不要将旧工程提示或其他聊天内容当成本次授权。
 
 1. 用 `deepseek_status` 确认本机认证桥接可用。将任务发给其他聊天需要用户明确授权；保留原有 `deepseek_task`、`deepseek_result` 兼容入口。
@@ -15,4 +31,4 @@ description: 用于将任务交给本机 DeepSeek Harness，登记当前会话�
 
 编号仅为桥接路由身份。当前会话UUID由调用者正确提供，在宿主未提供可信身份前不得宣称编号实现了会话认证。首次登记返回 agentKey 仅一次，应私下保留；不要发送给对方、不要写入仓库或公开证据。bridge_task 的所有动作携带自己的 actorId 与 agentKey，已有编号修改 alias 也需对应 agentKey。
 
-默认不启用 Stop hook。deepseek_report_turn_end 仅保留兼容的显式入口，不得用来自动回信；闭环后不要调用它继续发送消息。
+默认不启用 Stop hook。deepseek_report_turn_end 已禁用为空操作，不读rollout、不发消息；闭环后不要调用它继续发送消息。

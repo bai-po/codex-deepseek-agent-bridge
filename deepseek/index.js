@@ -79,7 +79,12 @@ export function apply(ctx, config = {}) {
   }
 
   const store = createStore({ stateDir, logger })
-  const codexRef = { client: null, error: 'codex-client-not-loaded', binPath: config.codexBin }
+  const codexRef = {
+    client: null,
+    error: 'codex-client-not-loaded',
+    binPath: config.codexBin,
+    toolRegistrationErrors: { codexTools: null, lifecycleTools: null },
+  }
   const bridge = createBridgeServer({
     ctx,
     store,
@@ -110,20 +115,23 @@ export function apply(ctx, config = {}) {
 
     const disposers = []
 
-    // Register the DSH-side tools first: a failure there must never leave a
-    // half-registered route behind (a leaked prefix route would make every
-    // later activation fail with "duplicate prefix route" until a host restart).
     try {
-      const toolDisposers = registerTools(ctx, {
+      disposers.push(...registerTools(ctx, {
         bridge,
         codexRef,
         store,
         workspaceRoot: resolvedConfig.workspaceRoot,
-      })
-      disposers.push(...toolDisposers, ...registerLifecycleTools(ctx, bridge))
+      }))
     } catch (error) {
-      codexRef.error = `tool-registration-failed: ${String(error?.message ?? error)}`
-      logger.warn?.(`agent-bridge: ${codexRef.error}`)
+      codexRef.toolRegistrationErrors.codexTools = String(error?.message ?? error)
+      logger.warn?.(`agent-bridge: codex tool registration failed: ${codexRef.toolRegistrationErrors.codexTools}`)
+    }
+
+    try {
+      disposers.push(...registerLifecycleTools(ctx, bridge))
+    } catch (error) {
+      codexRef.toolRegistrationErrors.lifecycleTools = String(error?.message ?? error)
+      logger.warn?.(`agent-bridge: lifecycle tool registration failed: ${codexRef.toolRegistrationErrors.lifecycleTools}`)
     }
 
     try {

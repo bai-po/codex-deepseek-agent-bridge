@@ -1,6 +1,8 @@
+import {legacyResultView} from './read-policy.mjs'
 /**
- * DSH tools that let a DSH agent push work to an existing Codex thread and read
- * the reply back. Transport: local `codex` CLI subprocess (exec resume / queue),
+ * DSH tools that let a DSH agent push work to an existing Codex thread and
+ * inspect transport metadata. Replies must be actively pushed to this chat.
+ * Transport: local `codex` CLI subprocess (exec resume / queue),
  * implemented by lib/codex-client.mjs.
  */
 import { parameterSchemaSpecToJsonSchema } from '@deepseek-ai/dsh-tools'
@@ -42,7 +44,7 @@ export function registerTools(ctx, deps) {
     if (value.turnEnd !== undefined && value.turnEnd !== null) {
       lines.push(`turn: ${JSON.stringify(value.turnEnd)}`)
     }
-    if (value.error !== undefined && value.error !== null) lines.push(`error: ${value.error.code} ${value.error.message}`)
+    if (typeof value.error?.code === 'string' && value.error.code.length > 0) lines.push(`error: ${value.error.code}`)
     if (value.note !== undefined && value.note !== null) lines.push(`note: ${value.note}`)
     return lines.join('\n')
   }
@@ -52,7 +54,7 @@ export function registerTools(ctx, deps) {
   const codexTaskDefinition = {
     name: 'codex_task',
     description:
-      'Send a task or message from this DeepSeek Harness session to an existing Codex thread on this machine, then read its reply. Use it to delegate work to the Codex agent (implementation, code review, file edits in its own thread) and to keep long-running work off this conversation. Delivery defaults to "queue" for messages to a Desktop/TUI-owned chat; the current turn must finish before the queued message can run. Always pass the exact `thread` supplied by the recipient or selected from codex_threads; never guess the latest thread. Explicit "resume" is only for an idle thread not owned by another client and starts a separate CLI run. Queue acceptance does not prove consumption or a reply.',
+      'Send a task or message from this DeepSeek Harness session to an existing Codex thread on this machine. This tool returns transport status only; it does not wait for or read a reply. Any reply must be actively pushed into this chat. Never pull an open peer report. Use it to delegate work to the Codex agent (implementation, code review, file edits in its own thread) and to keep long-running work off this conversation. Delivery defaults to "queue" for messages to a Desktop/TUI-owned chat; the current turn must finish before the queued message can run. Always pass the exact `thread` supplied by the recipient or selected from codex_threads; never guess the latest thread. Explicit "resume" is only for an idle thread not owned by another client and starts a separate CLI run. Queue acceptance does not prove consumption or a reply.',
     parameters: {
       message: {
         type: 'string',
@@ -75,7 +77,7 @@ export function registerTools(ctx, deps) {
       },
       waitMs: {
         type: 'number',
-        description: 'Wait up to this many milliseconds for the reply before returning (max 120000). Omit to return as soon as the task is dispatched.',
+        description: 'Deprecated compatibility field; sending never waits for or reads the peer reply.',
       },
     },
     output: {
@@ -87,9 +89,9 @@ export function registerTools(ctx, deps) {
           taskId: { type: 'string' },
           threadId: { type: 'string' },
           state: { type: 'string' },
-          reply: { type: 'string' },
+          reply: { oneOf: [{ type: 'string' }, { type: 'null' }] },
           replyPath: { type: 'string' },
-          turnEnd: { type: 'object', additionalProperties: true },
+          turnEnd: { oneOf: [{ type: 'object', additionalProperties: true }, { type: 'null' }] },
           error: { type: 'object', additionalProperties: true },
           note: { type: 'string' },
         },
@@ -110,29 +112,8 @@ export function registerTools(ctx, deps) {
         title: typeof args?.title === 'string' ? args.title : undefined,
         delivery,
       })
-      const waitMs = typeof args?.waitMs === 'number' ? Math.min(Math.max(0, args.waitMs), 120000) : 0
-      if (delivery === 'queue') {
-        const queued = await client.wait({ taskId: sent.taskId, waitMs: 10000 })
-        if (queued.error) throw FAIL(queued.error.code ?? 'codex/queue-failed', queued.error.message)
-        return {
-          taskId: sent.taskId,
-          threadId,
-          state: queued.state,
-          note: queued.note ?? '队列命令仍在处理；请用 codex_result 检查是否被接受。排队不代表对方已收到或回复。',
-        }
-      }
-      if (waitMs <= 0) return { taskId: sent.taskId, threadId, state: sent.state }
-      const result = await client.wait({ taskId: sent.taskId, waitMs })
-      return {
-        taskId: sent.taskId,
-        threadId: result.threadId ?? threadId,
-        state: result.state,
-        ...(typeof result.reply === 'string' && result.reply.length > 0
-          ? { reply: clip(result.reply, MAX_TOOL_REPLY), replyPath: replyPathOf(sent.taskId) }
-          : {}),
-        ...(result.turnEnd === undefined || result.turnEnd === null ? {} : { turnEnd: result.turnEnd }),
-        ...(result.error === undefined || result.error === null ? {} : { error: result.error }),
-      }
+      return {...legacyResultView({...sent,threadId},false),note:'消息已提交传输；请等待对方主动发送消息。提交不证明队列接受、消费或验收。'}
+
     },
   }
 
@@ -141,12 +122,12 @@ export function registerTools(ctx, deps) {
   const codexResultDefinition = {
     name: 'codex_result',
     description:
-      'Read or wait for the result of a Codex task started by codex_task. Returns the current state immediately when the task already finished; otherwise waits up to waitMs (default 60000, max 120000) for the Codex turn to end. State is queued|running|done|error.',
+      'Read metadata only while open; never wait for or pull peer body. Only verified bilateral closure permits this exact transport archive. done is not closure.',
     parameters: {
       taskId: { type: 'string', required: true, description: 'Task id returned by codex_task.' },
       waitMs: {
         type: 'number',
-        description: 'Maximum wait in milliseconds (default 60000, max 120000). Use 0 to only read the current state.',
+        description: 'Deprecated compatibility field; ignored. codex_result always returns the current status immediately.',
       },
     },
     output: {
@@ -158,33 +139,24 @@ export function registerTools(ctx, deps) {
           taskId: { type: 'string' },
           threadId: { type: 'string' },
           state: { type: 'string' },
-          reply: { type: 'string' },
+          reply: { oneOf: [{ type: 'string' }, { type: 'null' }] },
           replyPath: { type: 'string' },
-          turnEnd: { type: 'object', additionalProperties: true },
+          turnEnd: { oneOf: [{ type: 'object', additionalProperties: true }, { type: 'null' }] },
           usage: { type: 'object', additionalProperties: true },
           error: { type: 'object', additionalProperties: true },
         },
       },
       render: (_args, value) => text(describeResult(value)),
     },
-    timeoutMs: 130000,
+    timeoutMs: 30000,
     async execute(args) {
       const client = requireClient()
       const taskId = typeof args?.taskId === 'string' ? args.taskId.trim() : ''
       if (taskId.length === 0) throw FAIL('request/bad-request', 'taskId 不能为空')
-      const waitMs = typeof args?.waitMs === 'number' ? Math.min(Math.max(0, args.waitMs), 120000) : 60000
-      const result = await client.wait({ taskId, waitMs })
-      return {
-        taskId,
-        ...(result.threadId === undefined ? {} : { threadId: result.threadId }),
-        state: result.state,
-        ...(typeof result.reply === 'string' && result.reply.length > 0
-          ? { reply: clip(result.reply, MAX_TOOL_REPLY), replyPath: replyPathOf(taskId) }
-          : {}),
-        ...(result.turnEnd === undefined || result.turnEnd === null ? {} : { turnEnd: result.turnEnd }),
-        ...(result.usage === undefined || result.usage === null ? {} : { usage: result.usage }),
-        ...(result.error === undefined || result.error === null ? {} : { error: result.error }),
-      }
+      const archived = bridge.lifecycle.isTransportClosed(taskId)
+      const result = await client.status({taskId,metadataOnly:!archived})
+      return legacyResultView({...result,taskId},archived)
+
     },
   }
 
@@ -193,7 +165,7 @@ export function registerTools(ctx, deps) {
   const codexThreadsDefinition = {
     name: 'codex_threads',
     description:
-      'List Codex threads on this machine for this workspace, newest first, so a thread id can be passed to codex_task. Only reads each rollout file header; it never opens the conversation of a thread you did not ask for beyond its metadata.',
+      'List Codex threads on this machine for this workspace, newest first, so a thread id can be passed to codex_task. This is the only remaining rollout read: it reads only the first-line/header metadata for thread discovery, never task or conversation bodies.',
     parameters: {
       cwd: { type: 'string', description: 'Workspace directory to filter threads by (defaults to this bridge workspace).' },
       limit: { type: 'number', description: 'Maximum threads to return (1-20, default 10).' },

@@ -1,6 +1,6 @@
 {
   "name": "codex-deepseek-agent-bridge",
-  "version": "1.0.3-local.3",
+  "version": "1.0.4",
   "private": true,
   "type": "module",
   "license": "MIT",

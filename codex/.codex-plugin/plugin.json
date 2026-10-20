@@ -1,7 +1,7 @@
 {
   "name": "deepseek-bridge",
-  "version": "1.0.3-local.3",
-  "description": "Codex side of the local Agent Bridge: lets Codex send tasks to the local DeepSeek Harness agent over 127.0.0.1 and poll for its reply.",
+  "version": "1.0.4",
+  "description": "Codex side of the local Agent Bridge: lets Codex send tasks to the local DeepSeek Harness agent over 127.0.0.1 and receive actively pushed replies; open results expose status only.",
   "author": {
     "name": "Agent Bridge contributors"
   },

@@ -1,3 +1,4 @@
+import {legacyResultView} from './read-policy.mjs';
 // DSH -> Codex local task channel (protocol v1, section 3).
 //
 // Zero dependencies, ESM, Node built-ins only.
@@ -337,7 +338,7 @@ export function createCodexClient(options = {}) {
     };
     const body = `${JSON.stringify(meta, null, 2)}\n`;
     task.persistChain = (task.persistChain || Promise.resolve())
-      .then(() => fs.writeFile(task.metaPath, body, 'utf8'))
+      .then(async () => { await fs.writeFile(task.metaPath, body, 'utf8'); await fs.writeFile(path.join(task.taskDir,'status.json'), JSON.stringify(legacyResultView(task,false)), 'utf8'); })
       .catch((err) => {
         task.ioErrors.push(`meta: ${err.message}`);
       });
@@ -925,11 +926,16 @@ export function createCodexClient(options = {}) {
         throw bridgeError('codex/io-error', task.error.message, { taskId: task.taskId });
       }
 
-      // Fire and forget: send() resolves before codex produces any output.
+      // Queue mode waits for the queue CLI only, never for the recipient agent.
       queueMicrotask(() => {
         const run = delivery === 'queue' ? startQueue(task) : startResume(task);
         Promise.resolve(run).catch((err) => fail(task, err));
       });
+
+      if (delivery === 'queue') {
+        await task.finalized;
+        if (task.state === 'error') throw bridgeError(task.error?.code ?? 'codex/queue-failed',task.error?.message ?? 'queue transport failed',{taskId:task.taskId});
+      }
 
       return {
         taskId: task.taskId,
@@ -996,6 +1002,20 @@ export function createCodexClient(options = {}) {
     async status(params = {}) {
       const p = params && typeof params === 'object' ? params : {};
       const task = getTask(p.taskId);
+      if (p.metadataOnly === true) {
+        if (task) return legacyResultView(snapshot(task),false);
+        if (!safeTaskDirName(p.taskId)) throw bridgeError('codex/bad-request','invalid taskId');
+        try {
+          const meta=JSON.parse(await fs.readFile(path.join(config.logDir,p.taskId,'status.json'),'utf8'));
+          if(meta.taskId!==p.taskId)throw Error('task identity mismatch');
+          return legacyResultView(meta,false);
+        } catch(error) {
+          if(error.code!=='ENOENT')throw error;
+          try { await fs.access(path.join(config.logDir,p.taskId,'meta.json')); }
+          catch { throw bridgeError('codex/task-not-found','unknown taskId'); }
+          return {taskId:p.taskId,state:'unknown',reply:null,readPolicy:'push-only-until-closed',archiveAvailable:false,nextAction:'旧记录没有独立元数据；未读取旧正文文件。等待主动消息并完成实际验收。'};
+        }
+      }
       if (task) return snapshot(task);
       const fromDisk = await readTaskFromDisk(p.taskId);
       if (!fromDisk) throw bridgeError('codex/task-not-found', `unknown taskId: ${p.taskId}`);

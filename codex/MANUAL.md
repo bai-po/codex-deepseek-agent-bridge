@@ -1,6 +1,6 @@
 # Codex agent 手册
 
-版本 1.0.4。通过 MCP 使用，bridge_manual 可读本手册；sessionId 是当前真实 Codex thread ID。DeepSeek 须先启动插件。默认 queue 投递，活动聊天不要用 exec resume 抢 writer。
+版本 1.0.5。通过 MCP 使用，bridge_manual 可读本手册；sessionId 是当前真实 Codex thread ID。DeepSeek 须先启动插件。默认 queue 投递，活动聊天不要用 exec resume 抢 writer。
 
 # 工具操作
 

@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.0.5
+
+- Fix Windows Codex MCP startup by using plugin-relative ./server.mjs and cwd: .; the host previously passed the PLUGIN_ROOT placeholder literally and failed to start the server.
+- Align the Codex plugin, DeepSeek package, and repository versions at 1.0.5.
+
 ## 1.0.4
 
 - Fix Codex upgrades when an older local marketplace with the same name is already registered. Verify the old source, switch through the public Codex CLI, verify the installed plugin version, and restore the previous marketplace and plugin if the upgrade fails.

@@ -26,7 +26,15 @@ async function fixture(t){
  const rpc=(method,params)=>new Promise((resolve,reject)=>{const id=++seq;const timer=setTimeout(()=>reject(Error('MCP timeout')),5000);pending.set(id,value=>{clearTimeout(timer);resolve(value);});child.stdin.write(JSON.stringify({jsonrpc:'2.0',id,method,params})+'\n');});
  return {rpc,requests,call:async(name,args)=>(await rpc('tools/call',{name,arguments:args})).result};
 }
-test('v2 discovery preserves legacy and uses standard schemas',async t=>{const {rpc}=await fixture(t);const init=(await rpc('initialize',{})).result;assert.equal(init.serverInfo.version,'1.0.4');assert.ok(init.capabilities.resources);const tools=(await rpc('tools/list')).result.tools;for(const name of ['deepseek_task','deepseek_result','deepseek_status','bridge_agent','bridge_task','bridge_manual'])assert.ok(tools.some(x=>x.name===name),name);for(const tool of tools){assert.equal(tool.inputSchema.type,'object');assert.ok(tool.inputSchema.properties);}assert.deepEqual(tools.find(x=>x.name==='bridge_task').inputSchema.required,['action']);});
+test('Codex MCP configs use plugin-relative startup paths',async()=>{
+ for(const file of ['codex/.mcp.json','codex/mcp.json']){
+  const config=JSON.parse(await readFile(path.join(root,file),'utf8')).mcpServers.deepseek_bridge;
+  assert.equal(config.cwd,'.',file);
+  assert.deepEqual(config.args,['./server.mjs'],file);
+  assert.ok(!JSON.stringify(config).includes('${PLUGIN_ROOT}'),file);
+ }
+});
+test('v2 discovery preserves legacy and uses standard schemas',async t=>{const {rpc}=await fixture(t);const init=(await rpc('initialize',{})).result;const manifest=JSON.parse(await readFile(path.join(root,'codex/plugin.json'),'utf8'));assert.equal(init.serverInfo.version,manifest.version);assert.ok(init.capabilities.resources);const tools=(await rpc('tools/list')).result.tools;for(const name of ['deepseek_task','deepseek_result','deepseek_status','bridge_agent','bridge_task','bridge_manual'])assert.ok(tools.some(x=>x.name===name),name);for(const tool of tools){assert.equal(tool.inputSchema.type,'object');assert.ok(tool.inputSchema.properties);}assert.deepEqual(tools.find(x=>x.name==='bridge_task').inputSchema.required,['action']);});
 
 test('deepseek_result positive waitMs is one state wait and still filters open peer content',async t=>{
  const {call,requests,rpc}=await fixture(t);await rpc('initialize',{});const result=await call('deepseek_result',{taskId:'open',waitMs:5000});const value=result.structuredContent;

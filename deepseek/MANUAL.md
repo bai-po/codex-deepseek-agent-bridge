@@ -1,6 +1,6 @@
 # DeepSeek agent 手册
 
-版本 1.0.4。提供回环 HTTP 服务和桥工具；sessionId 是当前真实 Harness 会话 ID，不可填 Codex thread ID。接收方 Codex 必须登记，默认 queue 投递。
+版本 1.0.5。提供回环 HTTP 服务和桥工具；sessionId 是当前真实 Harness 会话 ID，不可填 Codex thread ID。接收方 Codex 必须登记，默认 queue 投递。
 
 启动后可检查带认证的 `/health`。`toolRegistrationErrors.codexTools` 与 `toolRegistrationErrors.lifecycleTools` 分别报告两组工具注册错误；`null` 表示该组没有登记错误。任一字段为文本时，该组工具可能不可用，先核对 DSH 实际加载版本及其 `@deepseek-ai/dsh-tools` 版本。
 

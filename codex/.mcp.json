@@ -3,9 +3,9 @@
     "deepseek_bridge": {
       "command": "node",
       "args": [
-        "${PLUGIN_ROOT}/server.mjs"
+        "./server.mjs"
       ],
-      "cwd": "${PLUGIN_ROOT}",
+      "cwd": ".",
       "enabled": true,
       "env_vars": [
         "USERPROFILE",
